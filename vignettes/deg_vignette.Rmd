@@ -1,0 +1,319 @@
+---
+title: "LTMG - DEG track (for differential expression analysis)"
+author:
+- Chi Zhang
+- Yu Zhang
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+vignette: >
+  %\VignetteIndexEntry{LPMG Tutorial}
+  %\VignetteEngine{knitr::rmarkdown}
+output:
+  pdf_document:
+    latex_engine: xelatex
+    extra_dependencies: ["dcolumn", "rotating", "rotfloat","xeCJK"]
+  html_document:
+    highlight: tango
+    theme: flatly
+  word_document:
+    fig_caption: yes
+    highlight: tango
+    md_extensions: -autolink_bare_uris
+bibliography: bibliography.bib
+---
+
+```{r setup, include=FALSE, cache = TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+options(width = 60)
+```
+
+# (1) Example data
+
+We will use Melissa Fishel's data, what is already in box, as the example data. There are five separated data sets.
+
+Basically, we may need the following steps for this analysis, let's use H_si and H_sc data as the example.
+
+## (i) a standard data loading function and an condition index generation method
+
+```matrix_generation```
+
+``` {R, cache = TRUE}
+tg_keys <- c("Fishel_scFPKM_sc1.txt", "Fishel_scFPKM_sc2.txt", "Fishel_scFPKM_si_APE1.txt", 
+  "Fishel_scFPKM_h_sc0.txt", "Fishel_scFPKM_h_si_APE1.txt")
+tg_conds_meta <- cbind(c(0, 0, 1, 0, 1), c(0, 0, 0, 1, 1))
+colnames(tg_conds_meta) <- c("Si", "H")
+rownames(tg_conds_meta) <- tg_keys
+
+Data_list <- list()
+Stat_list <- list()
+Data_0 <- c()
+for (i in 1:length(tg_keys)) {
+  Data_list[[i]] <- log(as.matrix(read.delim(tg_keys[i], row.names = 1)))
+  print(i)
+  print(dim(Data_list[[i]]))
+  Data_0 <- cbind(Data_0, Data_list[[i]])
+}
+``` 
+
+## (ii) running LTMG for the complete data
+
+### Select genes
+Genes with non-zero expression in more than 5 samples in ```Data_0```
+
+``` {R, cache = TRUE}
+selected.genes <- which(rowSums(Data_0 > 0) > 5)
+print(head(selected.genes))
+```
+
+### Run LTMG for the selected genes
+Run LTMG for ```Data_0```
+```gene_stat_all``` is a ```Data_list[[i]]```*1 vector the number of peaks for each gene identified by LTMG over ```Data_0```
+
+``` {R, cache = TRUE}
+library(LTMG)
+
+for (k in 1:5) {
+  print(SeparateKRpkmNew(x = Data_0[195, ], n = 100, q = 0, k = k, err = 1e-10))
+}
+```
+
+``` {R, cache = TRUE}
+for (gene in head(selected.genes, 3)) {
+  for (k in 1:5) {
+    print(SeparateKRpkmNew(x = Data_0[gene, ], n = 100, q = 0, k = k, err = 1e-10))
+  }
+}
+```
+
+## Here we have the BIC functions:
+
+``` {R, cache = TRUE}
+BIC_f_zcut <- function(y, rrr, Zcut) {
+  n <- length(y)
+  nparams <- nrow(rrr) * 3
+  w <- rrr[, 1]
+  u <- rrr[, 2]
+  sig <- rrr[, 3]
+  cc <- c()
+  y0 <- y[which(y >= Zcut)]
+  y1 <- y[which(y < Zcut)]
+  y1 <- y1 * 0 + Zcut
+  for (i in 1:nrow(rrr)) {
+    c0 <- dnorm(y0, u[i], sig[i]) * w[i]
+    c1 <- (1 - pnorm(y1, u[i], sig[i])) * w[i]
+    c <- c(c0, c1)
+    cc <- rbind(cc, c)
+  }
+  d <- apply(cc, 2, sum)
+  e <- sum(log(d))
+  f <- e * 2 - nparams * log(n)
+  return (f)
+}
+
+BIC_f_zcut2 <- function(y, rrr, Zcut) {
+  n <- length(y)
+  nparams <- nrow(rrr) * 3
+  w <- rrr[, 1]
+  u <- rrr[, 2]
+  sig <- rrr[, 3]
+  y0 <- y[which(y >= Zcut)]
+  cc <- c()
+  for (i in 1:nrow(rrr)) {
+    c <- dnorm(y0, u[i], sig[i]) * w[i]
+    cc <- rbind(cc, c)
+  }
+  d <- apply(cc, 2, sum)
+  e <- sum(log(d))
+  f <- e * 2 - nparams * log(n)
+  return (f)
+}
+```
+ 
+We can now get ```f``` value using ```BIC_f_zcut2()```.
+
+``` {R, cache = TRUE}
+for (k in 1:5) {
+  rrr <- SeparateKRpkmNew(x = Data_0[1, ], n = 100, q = 0, k = k, err = 1e-10)
+  print(BIC_f_zcut2(y = Data_0[1, ], rrr, 0))
+}
+
+```
+
+``` {R, cache = TRUE}
+GetBestK <- function(x, n, q, err = 1e-10){
+  best.bic <- -Inf
+  best.k <- 0
+  for (k in 1:7) {
+    rrr <- SeparateKRpkmNew(x = x, n = n, q = q, k = k, err = err)
+    bic <- BIC_f_zcut2(y = x, rrr, q)
+    if(is.nan(bic)) {
+      bic <- -Inf
+    }
+    if(bic >= best.bic) {
+      best.bic <- bic
+      best.k <- k
+    } else {
+      return(c(best.k, best.bic))
+    }
+  }
+  return(c(Inf, best.bic))
+}
+
+for (gene in head(selected.genes, 300)) {
+  best <- GetBestK(x = Data_0[gene, ], n = 100, q = 0, err = 1e-10)
+  if (best[1] != 2){
+    print(c(gene, best))
+  }
+}
+
+```
+
+This is the 55th one:
+
+``` {R, cache = TRUE}
+best <- GetBestK(x = Data_0[55, ], n = 100, q = 0, err = 1e-10)
+print(best)
+
+hist(Data_0[55,], breaks = 60)
+
+```
+
+This is the 191st one:
+
+``` {R, cache = TRUE}
+best <- GetBestK(x = Data_0[191, ], n = 100, q = 0, err = 1e-10)
+print(best)
+```
+
+
+This is the 195th one:
+
+``` {R, cache = TRUE}
+best <- GetBestK(x = Data_0[195, ], n = 100, q = 0, err = 1e-10)
+print(best)
+
+```
+
+## (iii) running LTMG-2LR for the genes fitted with less than 2 peaks in (ii)
+
+For all the genes with N==1,2
+Run LTMG2LR for all conditions (as an example, just for condition pair 1 and 2)
+
+``` {R, cache = TRUE}
+# SeparateKRpkmNewLR(Data_0[head(selected.genes), ], n = 100, q = 0, k = 2, r = 0)
+```
+
+## (iv) LTMG based test
+
+We have the following functions ready for this step: ```calculate_prob_sep_Zcut```, and ```discretization_method_1_LLR_mean```.
+
+We still need ```LTMG_DEG_test```.
+
+``` {R, cache = TRUE}
+# TODO: Change the function name to match our style guide
+calculate_prob_sep_Zcut <- function(data1, Zcut, a, u, sig) {
+  cc <- matrix(0, length(a), length(data1))
+  colnames(cc) <- names(data1)
+  for (i in 1:length(a)) {
+    c <- a[i] / sig[i] * exp(-(data1 - u[i]) ^ 2 / (2 * sig[i] ^ 2))
+    cc[i, ] <- c
+  }
+  cut_p <- rep(0, length(a))
+  for (i in 1:length(a)) {
+    cut_p[i] <- a[i] * pnorm(Zcut, u[i], sig[i])
+  }
+  for (i in 1:ncol(cc)) {
+    if (data1[i] < Zcut) {
+      cc[, i] <- cut_p
+    }
+  }
+  cc[which(is.na(cc) == 1)] <- 0
+  return(cc)
+}
+```
+
+``` {R, cache = TRUE}
+# TODO: Change the function name to match our style guide
+discretization_method_1_LLR_mean <- function(y, aaa, ccc, LLR_cut = 2) {
+  K <- 1 / LLR_cut + 1
+  if (nrow(aaa) == 1) {
+    print("Only one class")
+    return(y)
+  } else {
+    discretized_y <- rep(0, length(y))
+    for (i in 1:ncol(ccc)) {
+      ll <- which(ccc[, i] == max(ccc[, i]))[1]
+      if ((max(ccc[, i]) / sum(ccc[, i])) > (1 / K)) {
+        discretized_y[i] <- ll
+      }
+    }
+    blocks <- c()
+    st_c <- 1
+    end_c <- 1
+    st_c_v <- y[order(y)[1]]
+    end_c_v <- y[order(y)[1]]
+    label_c <- discretized_y[order(y)[1]]
+    for (i in 2:length(order(y))) {
+      if (discretized_y[order(y)[i]] == discretized_y[order(y)[i - 1]]) {
+        end_c <- i
+        end_c_v <- y[order(y)[i]]
+        if (i == length(order(y))) {
+          end_c <- i
+          end_c_v <- y[order(y)[i]]
+          blocks <- rbind(blocks, c(st_c, end_c, st_c_v, end_c_v, label_c))
+        }
+      } else {
+        blocks <- rbind(blocks, c(st_c, end_c, st_c_v, end_c_v, 
+          label_c))
+        label_c <- discretized_y[order(y)[i]]
+        st_c <- i
+        end_c <- i
+        st_c_v <- y[order(y)[i]]
+        end_c_v <- y[order(y)[i]]
+        if (i == length(order(y))) {
+          end_c <- i
+          end_c_v <- y[order(y)[i]]
+          blocks <- rbind(blocks, c(st_c, end_c, st_c_v, end_c_v, label_c))
+        }
+      }
+    }
+    if (nrow(blocks) > 1) {
+      for (i in 1:nrow(blocks)) {
+        if (blocks[i, 5] != 0) {
+          tg_i <- blocks[i, 5]
+          if (!((blocks[i, 3] <= aaa[tg_i, 2]) & (blocks[i, 4] >= aaa[tg_i, 2]))) {
+          blocks[i, 5] <- 0
+          }
+        }
+      }
+      for (i in 1:nrow(blocks)) {
+        discretized_y[order(y)[blocks[i, 1]:blocks[i, 2]]] <- blocks[i, 5]
+      }
+    }
+    return(discretized_y)
+  }
+}
+```
+
+``` {R, cache = TRUE}
+i <- 4
+x <- Data_0[i, ]
+Zcut0 <- 0
+best <- GetBestK(x = x, n = 1000, q = Zcut0, err = 1e-10)
+
+pp <- calculate_prob_sep_Zcut(x, Zcut0, best$result[, 1], best$result[, 2], best$result[, 3])
+cc <- discretization_method_1_LLR_mean(x, best$result, pp, LLR_cut = 0.1)
+
+print(x)
+print(pp)
+print(cc)
+```
+
+## (v) LTMG2L based test, need to implement a GLM model
+
+We need ```LTMG2LR_DEG_test```.
+
+## (vi) summarize the results from (iv) and (v)
+
+# References
+
+
